@@ -1,0 +1,1588 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>イベント整理券・入場管理＆リアルタイムサイネージ</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- QR Code Generator Library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0f9ff',
+                            100: '#e0f2fe',
+                            500: '#0284c7',
+                            600: '#0284c7',
+                            700: '#0369a1',
+                            900: '#0c4a6e',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+        .btn-touch {
+            min-height: 48px;
+            transition: transform 0.1s ease, background-color 0.15s ease;
+        }
+        .btn-touch:active {
+            transform: scale(0.96);
+        }
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        /* Signage Glow Effect */
+        @keyframes subtle-glow {
+            0%, 100% { box-shadow: 0 0 20px rgba(14, 165, 233, 0.3); }
+            50% { box-shadow: 0 0 40px rgba(14, 165, 233, 0.7); }
+        }
+        .signage-glow {
+            animation: subtle-glow 3s infinite;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen flex flex-col pb-20 md:pb-0">
+
+    <!-- Header -->
+    <header class="bg-slate-900 text-white sticky top-0 z-30 shadow-md">
+        <div class="max-w-5xl mx-auto px-4 py-2.5 flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <span id="roleBadge" class="bg-amber-500 text-slate-950 font-black text-xs px-2 py-0.5 rounded tracking-wider uppercase">管理者</span>
+                <h1 class="text-base font-bold truncate">入場管理＆リアルタイム案内</h1>
+            </div>
+            
+            <div class="flex items-center gap-2">
+                <!-- Live Clock -->
+                <div id="liveClock" class="hidden sm:block text-xs font-mono font-bold text-slate-300 bg-slate-800 px-2.5 py-1 rounded-md border border-slate-700">--:--:--</div>
+
+                <!-- Sync Status Indicator -->
+                <div id="cloudSyncBadge" class="flex items-center gap-1.5 text-xs bg-slate-800 text-slate-300 px-2.5 py-1 rounded-full border border-slate-700">
+                    <span class="w-2 h-2 rounded-full bg-slate-400" id="syncDot"></span>
+                    <span id="syncText">オフライン</span>
+                </div>
+
+                <!-- Chromebook Signage Switch Button -->
+                <button onclick="switchViewMode('display')" class="bg-brand-600 hover:bg-brand-500 text-white font-bold text-xs px-3 py-1.5 rounded-lg flex items-center gap-1.5 shadow">
+                    <i class="fa-solid fa-desktop"></i>
+                    <span class="hidden sm:inline">Chromebook用画面</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- System Delay Indicator -->
+        <div id="delayBanner" class="bg-slate-800 border-t border-slate-700 px-4 py-1.5 text-xs flex justify-between items-center max-w-5xl mx-auto">
+            <div class="flex items-center gap-2">
+                <i class="fa-solid fa-clock-rotate-left text-amber-400"></i>
+                <span>進行状態: <strong id="delayText" class="text-white font-semibold">予定通り</strong></span>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="openShareModal()" class="text-xs bg-slate-700 hover:bg-slate-600 px-2.5 py-1 rounded text-slate-200 font-bold flex items-center gap-1">
+                    <i class="fa-solid fa-share-nodes text-brand-400"></i> 共有/QR
+                </button>
+                <button onclick="requireAdmin(openDelayAdjustModal)" class="text-xs bg-slate-700 hover:bg-slate-600 px-2.5 py-1 rounded text-slate-200 font-bold">
+                    <i class="fa-solid fa-sliders mr-1"></i>調整
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Global Stats Dashboard Bar -->
+    <section class="bg-white border-b border-slate-200 shadow-sm">
+        <div class="max-w-5xl mx-auto px-2 py-2 grid grid-cols-5 gap-1 text-center text-xs">
+            <div class="bg-slate-50 p-1.5 rounded border border-slate-100">
+                <div class="text-slate-500 text-[10px] font-bold">整理券総数</div>
+                <div id="statTotalTickets" class="text-base font-black text-slate-800">0</div>
+            </div>
+            <div class="bg-emerald-50 p-1.5 rounded border border-emerald-100">
+                <div class="text-emerald-700 text-[10px] font-bold">入場済み</div>
+                <div id="statEntered" class="text-base font-black text-emerald-600">0</div>
+            </div>
+            <div class="bg-slate-50 p-1.5 rounded border border-slate-200">
+                <div class="text-slate-600 text-[10px] font-bold">未入場</div>
+                <div id="statUnentered" class="text-base font-black text-slate-700">0</div>
+            </div>
+            <div class="bg-amber-50 p-1.5 rounded border border-amber-100">
+                <div class="text-amber-700 text-[10px] font-bold">遅刻</div>
+                <div id="statLate" class="text-base font-black text-amber-600">0</div>
+            </div>
+            <div class="bg-rose-50 p-1.5 rounded border border-rose-100">
+                <div class="text-rose-700 text-[10px] font-bold">キャンセル</div>
+                <div id="statCancelled" class="text-base font-black text-rose-600">0</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Navigation Tabs (Staff View) -->
+    <nav id="staffNav" class="bg-white border-b border-slate-200 sticky top-[73px] z-20">
+        <div class="max-w-5xl mx-auto flex">
+            <button onclick="switchTab('main')" id="tabBtn-main" class="tab-btn flex-1 py-3 text-center text-sm font-bold border-b-2 border-brand-600 text-brand-600">
+                <i class="fa-solid fa-right-to-bracket text-base block mb-0.5"></i>受付画面
+            </button>
+            <button onclick="switchTab('tickets')" id="tabBtn-tickets" class="tab-btn flex-1 py-3 text-center text-sm font-bold border-b-2 border-transparent text-slate-500">
+                <i class="fa-solid fa-list-ol text-base block mb-0.5"></i>整理券一覧
+            </button>
+            <button onclick="switchTab('check')" id="tabBtn-check" class="tab-btn flex-1 py-3 text-center text-sm font-bold border-b-2 border-transparent text-slate-500">
+                <i class="fa-solid fa-magnifying-glass text-base block mb-0.5"></i>整理券照会
+            </button>
+            <button onclick="switchTab('slots')" id="tabBtn-slots" class="tab-btn flex-1 py-3 text-center text-sm font-bold border-b-2 border-transparent text-slate-500">
+                <i class="fa-solid fa-calendar-days text-base block mb-0.5"></i>時間枠管理
+            </button>
+            <button onclick="switchTab('settings')" id="tabBtn-settings" class="tab-btn flex-1 py-3 text-center text-sm font-bold border-b-2 border-transparent text-slate-500">
+                <i class="fa-solid fa-gear text-base block mb-0.5"></i>設定・権限
+            </button>
+        </div>
+    </nav>
+
+    <!-- Content Containers -->
+    <main class="max-w-5xl mx-auto p-3 sm:p-4 flex-1 w-full">
+
+        <!-- TAB 1: Main View (Current Admission Slot Focus) -->
+        <div id="tab-main" class="tab-content space-y-4">
+            
+            <!-- Current Slot Hero Card -->
+            <div class="bg-slate-900 text-white rounded-2xl p-4 sm:p-6 shadow-xl border border-slate-800 relative overflow-hidden">
+                <div id="mainOverCapBanner" class="hidden mb-3 bg-amber-500/20 border border-amber-500 text-amber-300 text-xs px-3 py-1.5 rounded-lg flex items-center justify-between">
+                    <span><i class="fa-solid fa-triangle-exclamation mr-1"></i> <strong>通常定員超過:</strong> この枠は定員9人以上に設定されています</span>
+                </div>
+
+                <div class="flex justify-between items-start">
+                    <div>
+                        <span class="inline-block bg-brand-500 text-white text-xs font-bold px-2.5 py-1 rounded-full mb-1">
+                            現在の案内枠
+                        </span>
+                        <h2 id="mainSlotTime" class="text-3xl sm:text-4xl font-black tracking-tight text-white">10:00 〜 10:30</h2>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-xs text-slate-400 block">呼び出し整理券番号</span>
+                        <span id="mainSlotTicketRange" class="text-2xl sm:text-3xl font-black text-amber-400 font-mono">001 〜 005</span>
+                    </div>
+                </div>
+
+                <!-- Live Progress Bar -->
+                <div class="mt-4">
+                    <div class="flex justify-between text-xs text-slate-300 mb-1 font-semibold">
+                        <span>入場状況 (<span id="mainEnteredRatio">0/5</span>人)</span>
+                        <span id="mainRemainingText" class="text-emerald-400 font-bold">残り 5人</span>
+                    </div>
+                    <div class="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
+                        <div id="mainProgressBarEntered" class="bg-emerald-500 h-full transition-all duration-300" style="width: 0%"></div>
+                        <div id="mainProgressBarLate" class="bg-amber-500 h-full transition-all duration-300" style="width: 0%"></div>
+                        <div id="mainProgressBarCancelled" class="bg-rose-500 h-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <!-- Slot Summary Chips -->
+                <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+                    <div class="bg-slate-800/80 p-2 rounded-xl border border-slate-700/50">
+                        <div class="text-emerald-400 font-bold">入場済み</div>
+                        <div id="mainCountEntered" class="text-xl font-black text-emerald-400">0人</div>
+                    </div>
+                    <div class="bg-slate-800/80 p-2 rounded-xl border border-slate-700/50">
+                        <div class="text-slate-300 font-bold">未入場</div>
+                        <div id="mainCountUnentered" class="text-xl font-black text-white">0人</div>
+                    </div>
+                    <div class="bg-slate-800/80 p-2 rounded-xl border border-slate-700/50">
+                        <div class="text-amber-400 font-bold">遅刻/候補</div>
+                        <div id="mainCountLate" class="text-xl font-black text-amber-400">0人</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Navigation Controls between slots -->
+            <div class="flex gap-2">
+                <button onclick="requireAdmin(prevSlot)" class="btn-touch flex-1 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold py-3 px-4 rounded-xl shadow-sm flex items-center justify-center gap-2">
+                    <i class="fa-solid fa-arrow-left"></i> 前の枠
+                </button>
+                <button onclick="requireAdmin(confirmNextSlot)" class="btn-touch flex-[2] bg-brand-600 hover:bg-brand-700 active:bg-brand-800 text-white font-bold py-3 px-4 rounded-xl shadow-md text-base flex items-center justify-center gap-2">
+                    次の枠へ移動 <i class="fa-solid fa-arrow-right"></i>
+                </button>
+            </div>
+
+            <!-- Current Slot Ticket Action List -->
+            <div class="bg-white rounded-2xl p-4 shadow-sm border border-slate-200">
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="font-bold text-slate-800 text-base flex items-center gap-2">
+                        <i class="fa-solid fa-ticket text-brand-600"></i>
+                        現在枠の整理券一覧
+                    </h3>
+                    <span class="text-xs text-slate-500">ワンタップで状態切替</span>
+                </div>
+
+                <div id="currentTicketsContainer" class="space-y-3">
+                    <!-- Dynamic ticket cards -->
+                </div>
+            </div>
+
+            <!-- Next Slot Preview Card -->
+            <div class="bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                <div class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">NEXT SLOT (次の入場枠)</div>
+                <div class="flex justify-between items-center">
+                    <div>
+                        <div id="nextSlotTime" class="text-lg font-bold text-slate-800">10:30 〜 11:00</div>
+                        <div id="nextSlotTickets" class="text-xs font-medium text-slate-500">整理券 006〜010 (定員5人)</div>
+                    </div>
+                    <div id="nextSlotStatus" class="text-xs font-bold bg-slate-200 text-slate-700 px-3 py-1.5 rounded-lg">
+                        待機中
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: All Tickets List -->
+        <div id="tab-tickets" class="tab-content hidden space-y-4">
+            <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+                    <h2 class="text-lg font-bold text-slate-800">全整理券 一覧・検索</h2>
+                    <div class="flex flex-wrap gap-1 w-full sm:w-auto text-xs font-semibold">
+                        <button onclick="filterTickets('all')" id="filterBtn-all" class="filter-btn px-3 py-1.5 rounded-lg bg-brand-600 text-white font-bold">すべて</button>
+                        <button onclick="filterTickets('unentered')" id="filterBtn-unentered" class="filter-btn px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700">未入場</button>
+                        <button onclick="filterTickets('entered')" id="filterBtn-entered" class="filter-btn px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700">入場済</button>
+                        <button onclick="filterTickets('late')" id="filterBtn-late" class="filter-btn px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700">遅刻</button>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <div class="relative">
+                        <input type="number" id="ticketSearchInput" oninput="renderAllTickets()" placeholder="整理券番号で絞り込み (例: 5)" class="w-full bg-slate-50 border border-slate-300 rounded-xl py-2.5 pl-10 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
+                        <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3 text-slate-400 text-sm"></i>
+                    </div>
+                </div>
+
+                <div id="allTicketsList" class="divide-y divide-slate-100 max-h-[60vh] overflow-y-auto no-scrollbar pr-1">
+                    <!-- Dynamic tickets list -->
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: Ticket Verification -->
+        <div id="tab-check" class="tab-content hidden space-y-4">
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 text-center">
+                <i class="fa-solid fa-id-card text-4xl text-brand-600 mb-2"></i>
+                <h2 class="text-xl font-bold text-slate-800">整理券番号 確認・照会</h2>
+                <p class="text-xs text-slate-500 mt-1 mb-4">お客様の整理券番号を入力して、時間枠・受付状況を確認します</p>
+
+                <div class="max-w-xs mx-auto space-y-3">
+                    <div class="relative">
+                        <input type="number" id="checkTicketInput" placeholder="番号を入力" class="w-full text-center text-3xl font-mono font-bold tracking-wider py-3 border-2 border-slate-300 rounded-xl focus:border-brand-500 focus:outline-none bg-slate-50">
+                    </div>
+
+                    <button onclick="verifyTicketNumber()" class="btn-touch w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-3 rounded-xl text-base shadow">
+                        <i class="fa-solid fa-check-double mr-1"></i> 整理券を確認する
+                    </button>
+                </div>
+
+                <div class="max-w-xs mx-auto grid grid-cols-3 gap-2 mt-4 text-slate-700 font-bold">
+                    <button onclick="keypadPress('1')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">1</button>
+                    <button onclick="keypadPress('2')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">2</button>
+                    <button onclick="keypadPress('3')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">3</button>
+                    <button onclick="keypadPress('4')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">4</button>
+                    <button onclick="keypadPress('5')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">5</button>
+                    <button onclick="keypadPress('6')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">6</button>
+                    <button onclick="keypadPress('7')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">7</button>
+                    <button onclick="keypadPress('8')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">8</button>
+                    <button onclick="keypadPress('9')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">9</button>
+                    <button onclick="keypadPress('C')" class="bg-rose-100 text-rose-700 active:bg-rose-200 py-3 rounded-xl text-sm shadow-sm">クリア</button>
+                    <button onclick="keypadPress('0')" class="bg-slate-100 active:bg-slate-300 py-3 rounded-xl text-lg shadow-sm">0</button>
+                    <button onclick="keypadPress('DEL')" class="bg-slate-200 text-slate-700 active:bg-slate-300 py-3 rounded-xl text-sm shadow-sm"><i class="fa-solid fa-backspace"></i></button>
+                </div>
+            </div>
+
+            <div id="checkResultContainer" class="hidden"></div>
+        </div>
+
+        <!-- TAB 4: Time Slot Management -->
+        <div id="tab-slots" class="tab-content hidden space-y-4">
+            <div class="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex justify-between items-center mb-2">
+                    <h2 class="text-lg font-bold text-slate-800">時間枠・定員管理</h2>
+                    <span class="text-xs text-slate-500">要管理者権限</span>
+                </div>
+                <p class="text-xs text-slate-500 mb-4">各枠の開始・終了時刻を直接入力して個別調整できます。定員は5〜8人推奨（9人以上は警告表示）。</p>
+
+                <div id="slotListContainer" class="space-y-3"></div>
+            </div>
+        </div>
+
+        <!-- TAB 5: Settings & Security -->
+        <div id="tab-settings" class="tab-content hidden space-y-4">
+            <!-- Custom Domain Base URL Option (Solves blob: URL issue) -->
+            <div class="bg-amber-50 border border-amber-200 p-5 rounded-2xl space-y-3">
+                <h2 class="text-base font-bold text-amber-900 flex items-center gap-2">
+                    <i class="fa-solid fa-link text-amber-600"></i>
+                    共有用ベースURLの設定（QRコード・共有リンク用）
+                </h2>
+                <p class="text-xs text-amber-800 leading-relaxed">
+                    プレビュー環境などの場合、自動生成されたURL（<code>blob:https://...</code>）では他のスマホからアクセスできません。公開先サーバーのWebアドレス（例: <code>https://taiyooooo18.github.io/nbu-digilab/</code>）を入力しておくと、正しい共有QRコードを生成できます。
+                </p>
+
+                <div class="flex gap-2 items-center">
+                    <input type="text" id="inputCustomBaseUrl" placeholder="例: https://taiyooooo18.github.io/nbu-digilab/" class="flex-1 bg-white border border-amber-300 rounded-xl p-2.5 text-xs font-mono">
+                    <button onclick="saveCustomBaseUrl()" class="btn-touch bg-amber-600 hover:bg-amber-700 text-white font-bold px-4 rounded-xl text-xs">
+                        保存
+                    </button>
+                </div>
+            </div>
+
+            <!-- Security & Admin PIN Settings Card -->
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+                <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fa-solid fa-shield-halved text-brand-600"></i>
+                    編集権限・管理者設定
+                </h2>
+                <p class="text-xs text-slate-600 leading-relaxed">
+                    あなたが管理者として編集を行うための暗証番号（PIN）を設定します。閲覧者（他スタッフや来場者）はこの番号を知らない限りデータを変更できません。
+                </p>
+
+                <div class="flex gap-2 items-center">
+                    <div class="flex-1">
+                        <label class="block text-xs font-bold text-slate-700 mb-1">管理者PINコード (4桁〜数字)</label>
+                        <input type="password" id="inputAdminPin" value="1234" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-mono text-center font-bold text-lg">
+                    </div>
+                    <button onclick="saveAdminPin()" class="btn-touch bg-brand-600 hover:bg-brand-700 text-white font-bold px-4 rounded-xl text-sm mt-5">
+                        保存
+                    </button>
+                </div>
+
+                <div class="pt-2 border-t flex justify-between items-center text-xs">
+                    <span class="text-slate-500">現在のセッション状態:</span>
+                    <span id="sessionStatusBadge" class="bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full">管理者権限あり</span>
+                </div>
+            </div>
+
+            <!-- Event Summary Card -->
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
+                <h2 class="text-lg font-bold text-slate-800 mb-3 flex items-center gap-2">
+                    <i class="fa-solid fa-chart-pie text-brand-600"></i>
+                    本日のイベント集計データ
+                </h2>
+
+                <div class="grid grid-cols-2 gap-3 mb-4">
+                    <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 text-center">
+                        <div class="text-xs text-slate-500">総整理券発行数</div>
+                        <div id="summaryTotal" class="text-2xl font-black text-slate-800">0 枚</div>
+                    </div>
+                    <div class="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-center">
+                        <div class="text-xs text-emerald-700">総入場完了者</div>
+                        <div id="summaryEntered" class="text-2xl font-black text-emerald-600">0 人</div>
+                    </div>
+                    <div class="bg-amber-50 p-3 rounded-xl border border-amber-200 text-center">
+                        <div class="text-xs text-amber-700">総遅刻者</div>
+                        <div id="summaryLate" class="text-2xl font-black text-amber-600">0 人</div>
+                    </div>
+                    <div class="bg-rose-50 p-3 rounded-xl border border-rose-200 text-center">
+                        <div class="text-xs text-rose-700">総キャンセル</div>
+                        <div id="summaryCancelled" class="text-2xl font-black text-rose-600">0 人</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Event Configuration Form -->
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+                <h2 class="text-lg font-bold text-slate-800 flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-brand-600"></i>
+                    スケジュール再生成
+                </h2>
+
+                <div class="space-y-3 text-sm">
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">イベント開始時刻</label>
+                        <input type="time" id="cfgStartTime" value="10:00" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold">
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">枠の間隔 (時間差)</label>
+                        <select id="cfgSlotInterval" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold">
+                            <option value="15">15分間隔</option>
+                            <option value="20">20分間隔</option>
+                            <option value="30" selected>30分間隔 (標準)</option>
+                            <option value="45">45分間隔</option>
+                            <option value="60">60分 (1時間) 間隔</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">基本定員 (1枠あたり)</label>
+                        <select id="cfgDefaultCapacity" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold">
+                            <option value="5" selected>5人 (標準)</option>
+                            <option value="6">6人</option>
+                            <option value="7">7人</option>
+                            <option value="8">8人</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">作成する時間枠数</label>
+                        <input type="number" id="cfgTotalSlots" value="10" min="1" max="24" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold">
+                    </div>
+
+                    <div>
+                        <label class="block font-bold text-slate-700 mb-1">整理券 開始番号</label>
+                        <input type="number" id="cfgStartTicketNum" value="1" min="1" class="w-full bg-slate-50 border border-slate-300 rounded-xl p-2.5 font-bold">
+                    </div>
+                </div>
+
+                <button onclick="requireAdmin(applySettings)" class="btn-touch w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 rounded-xl shadow mt-2">
+                    <i class="fa-solid fa-floppy-disk mr-1"></i> スケジュールを再生成する
+                </button>
+            </div>
+
+            <!-- Reset Data -->
+            <div class="bg-rose-50 border border-rose-200 p-4 rounded-2xl">
+                <h3 class="font-bold text-rose-800 text-sm mb-1">データの初期化</h3>
+                <p class="text-xs text-rose-600 mb-3">当日の全データをリセットします。</p>
+                <button onclick="requireAdmin(openResetModal)" class="btn-touch w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 rounded-xl text-xs">
+                    <i class="fa-solid fa-trash-can mr-1"></i> 全データをリセットする
+                </button>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- CHROMEBOOK DISPLAY / VISITOR SIGNAGE FULLSCREEN VIEW (Hidden by default) -->
+    <div id="signageView" class="fixed inset-0 bg-slate-950 text-white z-50 flex flex-col hidden overflow-hidden select-none">
+        <!-- Signage Header Bar -->
+        <header class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <span class="bg-emerald-500 text-slate-950 text-sm font-black px-3 py-1 rounded-full uppercase tracking-wider animate-pulse">
+                    <i class="fa-solid fa-bullhorn mr-1"></i> ご案内中
+                </span>
+                <h1 class="text-xl sm:text-2xl font-black text-white tracking-wide">本日の入場案内</h1>
+            </div>
+            <div class="flex items-center gap-4">
+                <div class="text-right">
+                    <div class="text-xs text-slate-400">現在時刻</div>
+                    <div id="signageClock" class="text-2xl font-mono font-black text-amber-400">10:00:00</div>
+                </div>
+                <button onclick="playChimeSound()" class="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 rounded-xl p-3 text-lg" title="ピンポンチャイム再生">
+                    <i class="fa-solid fa-bell"></i>
+                </button>
+                <button onclick="toggleFullScreen()" class="bg-slate-800 hover:bg-slate-700 text-white border border-slate-700 rounded-xl p-3 text-lg" title="全画面表示">
+                    <i class="fa-solid fa-expand"></i>
+                </button>
+                <button onclick="switchViewMode('staff')" class="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl px-4 py-2 text-sm font-bold">
+                    <i class="fa-solid fa-xmark mr-1"></i> 戻る
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Signage Display Board -->
+        <main class="flex-1 p-6 flex flex-col justify-between gap-6 max-w-7xl mx-auto w-full">
+            
+            <!-- Delay / Progress Status Banner -->
+            <div id="signageDelayBanner" class="bg-slate-900 border-2 border-emerald-500/50 rounded-2xl p-4 flex items-center justify-between shadow-lg">
+                <div class="flex items-center gap-3">
+                    <div id="signageDelayIcon" class="w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl font-bold">
+                        <i class="fa-solid fa-circle-check"></i>
+                    </div>
+                    <div>
+                        <div class="text-xs text-slate-400 font-bold uppercase tracking-wider">進行状況 (PROGRESS STATUS)</div>
+                        <div id="signageDelayText" class="text-xl sm:text-2xl font-black text-emerald-400">ただいま予定通り進行中です</div>
+                    </div>
+                </div>
+                <div class="text-right">
+                    <div class="text-xs text-slate-400">次回更新予定</div>
+                    <div id="signageNextUpdate" class="text-sm font-mono text-slate-200 font-bold">リアルタイム自動更新中</div>
+                </div>
+            </div>
+
+            <!-- Hero Section: Currently Calling Ticket Numbers -->
+            <div class="bg-gradient-to-br from-slate-900 via-brand-900/60 to-slate-900 rounded-3xl p-8 sm:p-10 border-2 border-brand-500/80 shadow-2xl flex flex-col justify-center items-center text-center relative overflow-hidden signage-glow flex-1">
+                <div class="absolute top-4 left-6 text-brand-400 font-bold text-sm tracking-widest uppercase flex items-center gap-2">
+                    <span class="w-3 h-3 rounded-full bg-brand-500 inline-block animate-ping"></span>
+                    ただいま入場受付中の整理券番号
+                </div>
+
+                <div class="my-auto py-4">
+                    <div id="signageHeroTickets" class="text-6xl sm:text-8xl md:text-9xl font-black font-mono text-amber-400 tracking-wider text-shadow-lg">
+                        001 〜 005
+                    </div>
+                    <div class="mt-4 flex items-center justify-center gap-2 text-xl sm:text-2xl font-bold text-slate-200">
+                        <i class="fa-regular fa-clock text-brand-400"></i>
+                        <span>対象枠: <strong id="signageHeroTime" class="text-white">10:00 〜 10:30</strong></span>
+                    </div>
+                </div>
+
+                <!-- Live Remaining Capacity Indicator -->
+                <div class="w-full max-w-xl bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex justify-around items-center">
+                    <div>
+                        <span class="text-xs text-slate-400 block">入場状況</span>
+                        <span id="signageRatioText" class="text-2xl font-black text-emerald-400">0 / 5 人</span>
+                    </div>
+                    <div class="h-8 w-px bg-slate-800"></div>
+                    <div>
+                        <span class="text-xs text-slate-400 block">案内状態</span>
+                        <span id="signageStatusBadge" class="text-2xl font-black text-brand-400">受付中</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Section: Next Slot Notice -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex items-center justify-between">
+                    <div>
+                        <div class="text-xs text-brand-400 font-bold tracking-wider uppercase mb-1">
+                            <i class="fa-solid fa-forward mr-1"></i> 次に準備されるお客様 (NEXT SLOT)
+                        </div>
+                        <div id="signageNextTime" class="text-2xl font-black text-white">10:30 〜 11:00</div>
+                        <div id="signageNextTickets" class="text-sm font-mono font-bold text-slate-400">整理券 006 〜 010 番の方</div>
+                    </div>
+                    <div class="text-right bg-slate-800 px-4 py-2 rounded-xl text-xs font-bold text-slate-300">
+                        準備してお待ちください
+                    </div>
+                </div>
+
+                <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 flex items-center justify-between">
+                    <div>
+                        <div class="text-xs text-amber-400 font-bold tracking-wider uppercase mb-1">
+                            <i class="fa-solid fa-circle-info mr-1"></i> 来場者様へのお願い
+                        </div>
+                        <div class="text-xs text-slate-300 leading-relaxed">
+                            整理券をお持ちの方は、お持ちの番号の時間枠になりましたら入口スタッフにお見せください。
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Modals -->
+
+    <!-- Modal: Share & QR Code -->
+    <div id="modalShare" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 text-center">
+            <div class="flex justify-between items-center border-b pb-2">
+                <h3 class="font-bold text-slate-800 text-sm">他のユーザーと共有</h3>
+                <button onclick="closeModal('modalShare')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            
+            <div id="shareBlobWarning" class="hidden bg-amber-50 border border-amber-300 text-amber-800 text-xs p-2.5 rounded-xl text-left">
+                <i class="fa-solid fa-triangle-exclamation text-amber-600 mr-1"></i>
+                プレビュー環境(blob:)のため、このままでは他端末で開けません。「設定」タブで「共有用ベースURL」を指定してください。
+            </div>
+
+            <p class="text-xs text-slate-600 leading-relaxed">
+                以下のリンクまたはQRコードから、誰でもリアルタイムで現在の状況を閲覧できます。
+            </p>
+
+            <div class="bg-slate-50 p-4 rounded-xl border flex justify-center items-center">
+                <div id="qrcodeCanvas"></div>
+            </div>
+
+            <div class="space-y-2">
+                <button onclick="copyShareUrl('viewer')" class="btn-touch w-full bg-brand-600 hover:bg-brand-700 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow">
+                    <i class="fa-solid fa-copy"></i> 閲覧専用URLをコピーする
+                </button>
+                <button onclick="copyShareUrl('display')" class="btn-touch w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 rounded-xl text-xs flex items-center justify-center gap-1.5 shadow">
+                    <i class="fa-solid fa-desktop"></i> サイネージ用URLをコピーする
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Require Admin Passcode Input -->
+    <div id="modalAdminAuth" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 text-center">
+            <div class="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center text-amber-600 text-xl mx-auto">
+                <i class="fa-solid fa-lock"></i>
+            </div>
+            <div>
+                <h3 class="font-bold text-lg text-slate-900">管理者パスコードが必要です</h3>
+                <p class="text-xs text-slate-600 mt-1">この操作を行う権限を確認するため管理者PINコードを入力してください。</p>
+            </div>
+            <input type="password" id="inputAuthPin" placeholder="PINコードを入力" class="w-full text-center text-2xl font-mono border-2 border-slate-300 rounded-xl py-2 font-bold focus:border-brand-500 focus:outline-none">
+            <div class="flex gap-2">
+                <button onclick="closeModal('modalAdminAuth')" class="btn-touch flex-1 bg-slate-100 hover:bg-slate-200 font-bold text-slate-700 rounded-xl py-2 text-sm">
+                    キャンセル
+                </button>
+                <button onclick="verifyAdminPasscode()" class="btn-touch flex-1 bg-brand-600 hover:bg-brand-700 font-bold text-white rounded-xl py-2 text-sm shadow">
+                    認証する
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Confirm Next Slot -->
+    <div id="modalNextSlot" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 text-center">
+            <div class="w-12 h-12 bg-brand-100 rounded-full flex items-center justify-center text-brand-600 text-xl mx-auto">
+                <i class="fa-solid fa-forward-step"></i>
+            </div>
+            <div>
+                <h3 class="font-bold text-lg text-slate-900">次の入場枠へ移動</h3>
+                <p class="text-xs text-slate-600 mt-1">次の枠「<span id="nextSlotModalTime" class="font-bold text-slate-800">10:30〜11:00</span>」に案内を切り替えますか？</p>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="closeModal('modalNextSlot')" class="btn-touch flex-1 bg-slate-100 hover:bg-slate-200 font-bold text-slate-700 rounded-xl py-2.5 text-sm">
+                    キャンセル
+                </button>
+                <button onclick="executeNextSlot()" class="btn-touch flex-1 bg-brand-600 hover:bg-brand-700 text-white font-bold py-2.5 text-sm shadow">
+                    移動する
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Delay Manual Adjust -->
+    <div id="modalDelay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+            <div class="flex justify-between items-center border-b pb-2">
+                <h3 class="font-bold text-slate-800 text-sm">進行状況（遅れ）の調整</h3>
+                <button onclick="closeModal('modalDelay')" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <p class="text-xs text-slate-500">現場の混雑状況に合わせて進行時間の遅れ/前倒しを手動調整します。</p>
+            <div>
+                <label class="block text-xs font-bold text-slate-700 mb-1">現在の遅れ時間 (分)</label>
+                <div class="flex items-center gap-2">
+                    <button onclick="adjustDelayMinutes(-5)" class="bg-slate-200 px-3 py-2 rounded-lg font-bold text-slate-700">-5分</button>
+                    <input type="number" id="inputDelayMinutes" value="0" class="w-full text-center font-black text-xl border rounded-lg py-1.5">
+                    <button onclick="adjustDelayMinutes(5)" class="bg-slate-200 px-3 py-2 rounded-lg font-bold text-slate-700">+5分</button>
+                </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-xs">
+                <button onclick="setDelay(0)" class="bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold py-2 rounded-lg">予定通り(0分)</button>
+                <button onclick="setDelay(10)" class="bg-amber-50 text-amber-700 border border-amber-200 font-bold py-2 rounded-lg">10分遅れ</button>
+                <button onclick="setDelay(20)" class="bg-rose-50 text-rose-700 border border-rose-200 font-bold py-2 rounded-lg">20分遅れ</button>
+            </div>
+            <button onclick="saveDelaySetting()" class="btn-touch w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm">
+                更新する
+            </button>
+        </div>
+    </div>
+
+    <!-- Modal: Reset Confirmation -->
+    <div id="modalReset" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4 text-center">
+            <div class="w-12 h-12 bg-rose-100 rounded-full flex items-center justify-center text-rose-600 text-xl mx-auto">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+            </div>
+            <div>
+                <h3 class="font-bold text-lg text-slate-900">本当にリセットしますか？</h3>
+                <p class="text-xs text-slate-600 mt-1">全てのデータが消去され初期状態に戻ります。</p>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="closeModal('modalReset')" class="btn-touch flex-1 bg-slate-100 hover:bg-slate-200 font-bold text-slate-700 rounded-xl py-2.5 text-sm">
+                    キャンセル
+                </button>
+                <button onclick="executeResetData()" class="btn-touch flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold py-2.5 text-sm shadow">
+                    リセット実行
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase Module Scripts -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Initialization with standard global configs
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-event-app';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "demo-api-key",
+            authDomain: "demo.firebaseapp.com",
+            projectId: "demo-project",
+            storageBucket: "demo.appspot.com",
+            messagingSenderId: "123456789",
+            appId: "1:123456789:web:abcdef"
+        };
+
+        let db, auth;
+        let isCloudConnected = false;
+        let pendingAction = null;
+
+        // Application Main State
+        window.appData = {
+            config: {
+                startTime: '10:00',
+                slotInterval: 30,
+                defaultCapacity: 5,
+                totalSlots: 10,
+                startTicketNum: 1,
+                adminPin: '1234',
+                customBaseUrl: ''
+            },
+            currentSlotIndex: 0,
+            delayMinutes: 0,
+            slots: [],
+            tickets: {}
+        };
+
+        window.isAthorizedAdmin = false;
+        let currentFilter = 'all';
+
+        // Initialize Firebase Sync
+        async function initFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+                // Listen to Firestore document updates
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'events', 'live_state');
+                onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const remoteData = docSnap.data();
+                        if (remoteData && remoteData.appData) {
+                            window.appData = remoteData.appData;
+                            updateSyncBadge('online');
+                            renderAll();
+                        }
+                    } else {
+                        saveDataToCloud();
+                    }
+                }, (error) => {
+                    console.warn("Firestore offline fallback mode:", error);
+                    updateSyncBadge('offline');
+                });
+
+                isCloudConnected = true;
+            } catch (e) {
+                console.warn("Firebase Auth/Firestore failed, defaulting to local state.", e);
+                updateSyncBadge('offline');
+            }
+        }
+
+        function updateSyncBadge(status) {
+            const dot = document.getElementById('syncDot');
+            const text = document.getElementById('syncText');
+
+            if (status === 'online') {
+                dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+                text.textContent = '同期中';
+            } else {
+                dot.className = 'w-2 h-2 rounded-full bg-slate-400';
+                text.textContent = 'オフライン';
+            }
+        }
+
+        // Save State Logic
+        window.saveData = function() {
+            localStorage.setItem('event_mgmt_local_data', JSON.stringify(window.appData));
+            if (isCloudConnected) {
+                saveDataToCloud();
+            }
+            renderAll();
+        };
+
+        async function saveDataToCloud() {
+            if (!db) return;
+            try {
+                const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'events', 'live_state');
+                await setDoc(docRef, {
+                    appData: window.appData,
+                    updatedAt: new Date().toISOString()
+                });
+            } catch (e) {
+                console.error("Cloud save failed:", e);
+            }
+        }
+
+        // On Page Load Initialization
+        window.addEventListener('load', () => {
+            loadLocalData();
+            initFirebase();
+            startClock();
+            
+            const urlParams = new URLSearchParams(window.location.search);
+            const mode = urlParams.get('mode');
+            if (mode === 'display') {
+                switchViewMode('display');
+            } else if (mode === 'viewer') {
+                window.isAthorizedAdmin = false;
+                document.getElementById('roleBadge').textContent = '閲覧者';
+                document.getElementById('roleBadge').className = 'bg-slate-700 text-white font-bold text-xs px-2 py-0.5 rounded tracking-wider';
+            } else {
+                window.isAthorizedAdmin = true;
+            }
+
+            renderAll();
+        });
+
+        function loadLocalData() {
+            const saved = localStorage.getItem('event_mgmt_local_data');
+            if (saved) {
+                try {
+                    window.appData = JSON.parse(saved);
+                } catch(e) {
+                    initDefaultData();
+                }
+            } else {
+                initDefaultData();
+            }
+        }
+
+        function initDefaultData() {
+            window.appData = {
+                config: {
+                    startTime: '10:00',
+                    slotInterval: 30,
+                    defaultCapacity: 5,
+                    totalSlots: 10,
+                    startTicketNum: 1,
+                    adminPin: '1234',
+                    customBaseUrl: ''
+                },
+                currentSlotIndex: 0,
+                delayMinutes: 0,
+                slots: [],
+                tickets: {}
+            };
+            generateSlotsAndTickets();
+        }
+
+        window.generateSlotsAndTickets = function() {
+            const { startTime, slotInterval = 30, defaultCapacity, totalSlots, startTicketNum } = window.appData.config;
+            const [startH, startM] = startTime.split(':').map(Number);
+
+            window.appData.slots = [];
+            let currentTicketCounter = Number(startTicketNum);
+            const intervalNum = Number(slotInterval);
+
+            for (let i = 0; i < totalSlots; i++) {
+                const slotStartTotalMin = startH * 60 + startM + (i * intervalNum);
+                const slotEndTotalMin = slotStartTotalMin + intervalNum;
+
+                const sh = String(Math.floor(slotStartTotalMin / 60) % 24).padStart(2, '0');
+                const sm = String(slotStartTotalMin % 60).padStart(2, '0');
+                const eh = String(Math.floor(slotEndTotalMin / 60) % 24).padStart(2, '0');
+                const em = String(slotEndTotalMin % 60).padStart(2, '0');
+
+                const existingCap = window.appData.slots[i] ? window.appData.slots[i].capacity : defaultCapacity;
+                const capacity = existingCap;
+
+                const startTicket = currentTicketCounter;
+                const endTicket = currentTicketCounter + capacity - 1;
+                currentTicketCounter += capacity;
+
+                window.appData.slots.push({
+                    index: i,
+                    startTimeStr: `${sh}:${sm}`,
+                    endTimeStr: `${eh}:${em}`,
+                    capacity: capacity,
+                    startTicket: startTicket,
+                    endTicket: endTicket
+                });
+            }
+            rebuildTicketsMap();
+        };
+
+        function rebuildTicketsMap() {
+            const newTickets = {};
+            window.appData.slots.forEach(slot => {
+                for (let num = slot.startTicket; num <= slot.endTicket; num++) {
+                    const ticketId = num;
+                    const existingStatus = window.appData.tickets[ticketId] ? window.appData.tickets[ticketId].status : 'unentered';
+                    newTickets[ticketId] = {
+                        id: ticketId,
+                        slotIndex: slot.index,
+                        status: existingStatus
+                    };
+                }
+            });
+            window.appData.tickets = newTickets;
+        }
+
+        function startClock() {
+            updateClocks();
+            setInterval(updateClocks, 1000);
+        }
+
+        function updateClocks() {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2, '0');
+            const m = String(now.getMinutes()).padStart(2, '0');
+            const s = String(now.getSeconds()).padStart(2, '0');
+            const timeStr = `${h}:${m}:${s}`;
+
+            const liveClock = document.getElementById('liveClock');
+            if (liveClock) liveClock.textContent = timeStr;
+
+            const signageClock = document.getElementById('signageClock');
+            if (signageClock) signageClock.textContent = timeStr;
+        }
+
+        window.renderAll = function() {
+            renderDashboardStats();
+            renderMainSlotView();
+            renderAllTickets();
+            renderSlotManagementList();
+            renderSettingsTab();
+            renderSignageView();
+        };
+
+        function formatTicketNum(num) {
+            return String(num).padStart(3, '0');
+        }
+
+        function renderDashboardStats() {
+            let total = 0, entered = 0, unentered = 0, late = 0, cancelled = 0;
+
+            Object.values(window.appData.tickets).forEach(t => {
+                total++;
+                if (t.status === 'entered') entered++;
+                else if (t.status === 'unentered') unentered++;
+                else if (t.status === 'late') late++;
+                else if (t.status === 'cancelled') cancelled++;
+            });
+
+            document.getElementById('statTotalTickets').textContent = total;
+            document.getElementById('statEntered').textContent = entered;
+            document.getElementById('statUnentered').textContent = unentered;
+            document.getElementById('statLate').textContent = late;
+            document.getElementById('statCancelled').textContent = cancelled;
+
+            const delayText = document.getElementById('delayText');
+            if (window.appData.delayMinutes === 0) {
+                delayText.textContent = '予定通り';
+                delayText.className = 'text-emerald-400 font-semibold';
+            } else if (window.appData.delayMinutes > 0) {
+                delayText.textContent = `${window.appData.delayMinutes}分遅れ`;
+                delayText.className = 'text-amber-400 font-semibold';
+            } else {
+                delayText.textContent = `${Math.abs(window.appData.delayMinutes)}分前倒し`;
+                delayText.className = 'text-sky-400 font-semibold';
+            }
+        }
+
+        function renderMainSlotView() {
+            const slot = window.appData.slots[window.appData.currentSlotIndex];
+            if (!slot) return;
+
+            document.getElementById('mainSlotTime').textContent = `${slot.startTimeStr} 〜 ${slot.endTimeStr}`;
+            document.getElementById('mainSlotTicketRange').textContent = `${formatTicketNum(slot.startTicket)} 〜 ${formatTicketNum(slot.endTicket)}`;
+
+            const overCapBanner = document.getElementById('mainOverCapBanner');
+            if (slot.capacity >= 9) {
+                overCapBanner.classList.remove('hidden');
+            } else {
+                overCapBanner.classList.add('hidden');
+            }
+
+            let slotEntered = 0, slotUnentered = 0, slotLate = 0, slotCancelled = 0;
+            const currentTickets = [];
+
+            for (let id = slot.startTicket; id <= slot.endTicket; id++) {
+                const ticket = window.appData.tickets[id];
+                if (ticket) {
+                    currentTickets.push(ticket);
+                    if (ticket.status === 'entered') slotEntered++;
+                    else if (ticket.status === 'unentered') slotUnentered++;
+                    else if (ticket.status === 'late') slotLate++;
+                    else if (ticket.status === 'cancelled') slotCancelled++;
+                }
+            }
+
+            document.getElementById('mainEnteredRatio').textContent = `${slotEntered}/${slot.capacity}`;
+            const remaining = slot.capacity - slotEntered;
+            document.getElementById('mainRemainingText').textContent = remaining > 0 ? `残り ${remaining}人` : '満員';
+
+            const enteredPct = (slotEntered / slot.capacity) * 100;
+            const latePct = (slotLate / slot.capacity) * 100;
+            const cancelledPct = (slotCancelled / slot.capacity) * 100;
+
+            document.getElementById('mainProgressBarEntered').style.width = `${enteredPct}%`;
+            document.getElementById('mainProgressBarLate').style.width = `${latePct}%`;
+            document.getElementById('mainProgressBarCancelled').style.width = `${cancelledPct}%`;
+
+            document.getElementById('mainCountEntered').textContent = `${slotEntered}人`;
+            document.getElementById('mainCountUnentered').textContent = `${slotUnentered}人`;
+            document.getElementById('mainCountLate').textContent = `${slotLate}人`;
+
+            const nextSlot = window.appData.slots[window.appData.currentSlotIndex + 1];
+            if (nextSlot) {
+                document.getElementById('nextSlotTime').textContent = `${nextSlot.startTimeStr} 〜 ${nextSlot.endTimeStr}`;
+                document.getElementById('nextSlotTickets').textContent = `整理券 ${formatTicketNum(nextSlot.startTicket)}〜${formatTicketNum(nextSlot.endTicket)} (定員${nextSlot.capacity}人)`;
+            } else {
+                document.getElementById('nextSlotTime').textContent = '最終枠です';
+                document.getElementById('nextSlotTickets').textContent = 'これ以降の時間枠はありません';
+            }
+
+            renderCurrentTicketsList(currentTickets);
+        }
+
+        function renderCurrentTicketsList(tickets) {
+            const container = document.getElementById('currentTicketsContainer');
+            container.innerHTML = '';
+
+            tickets.forEach(ticket => {
+                const card = document.createElement('div');
+                let statusBadge = '';
+                let statusBorder = 'border-slate-200';
+
+                if (ticket.status === 'entered') {
+                    statusBadge = '<span class="bg-emerald-100 text-emerald-800 text-xs font-bold px-2.5 py-1 rounded-full"><i class="fa-solid fa-check mr-1"></i>入場済み</span>';
+                    statusBorder = 'border-emerald-300 bg-emerald-50/40';
+                } else if (ticket.status === 'late') {
+                    statusBadge = '<span class="bg-amber-100 text-amber-800 text-xs font-bold px-2.5 py-1 rounded-full"><i class="fa-solid fa-clock mr-1"></i>遅刻</span>';
+                    statusBorder = 'border-amber-300 bg-amber-50/40';
+                } else if (ticket.status === 'cancelled') {
+                    statusBadge = '<span class="bg-rose-100 text-rose-800 text-xs font-bold px-2.5 py-1 rounded-full"><i class="fa-solid fa-ban mr-1"></i>キャンセル</span>';
+                    statusBorder = 'border-rose-200 bg-rose-50/30';
+                } else {
+                    statusBadge = '<span class="bg-slate-200 text-slate-700 text-xs font-bold px-2.5 py-1 rounded-full">未入場</span>';
+                }
+
+                card.className = `bg-slate-50 border rounded-xl p-3 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 transition ${statusBorder}`;
+
+                card.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="text-2xl font-black font-mono text-slate-900 tracking-wider">${formatTicketNum(ticket.id)}</span>
+                        <div>${statusBadge}</div>
+                    </div>
+                    <div class="flex items-center gap-1.5 w-full sm:w-auto">
+                        <button onclick="requireAdmin(() => setTicketStatus(${ticket.id}, 'entered'))" class="btn-touch flex-1 sm:flex-initial bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm px-4 py-2.5 rounded-xl shadow-sm flex items-center justify-center gap-1">
+                            <i class="fa-solid fa-circle-check text-base"></i> 入場
+                        </button>
+                        <button onclick="requireAdmin(() => setTicketStatus(${ticket.id}, 'late'))" class="btn-touch bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs px-3 py-2.5 rounded-xl">
+                            遅刻
+                        </button>
+                        <button onclick="requireAdmin(() => setTicketStatus(${ticket.id}, 'unentered'))" class="btn-touch bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs px-2.5 py-2.5 rounded-xl">
+                            未
+                        </button>
+                        <button onclick="requireAdmin(() => setTicketStatus(${ticket.id}, 'cancelled'))" class="btn-touch bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold text-xs px-2.5 py-2.5 rounded-xl">
+                            消
+                        </button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        window.setTicketStatus = function(ticketId, status) {
+            if (window.appData.tickets[ticketId]) {
+                window.appData.tickets[ticketId].status = status;
+                saveData();
+            }
+        };
+
+        function renderSignageView() {
+            const slot = window.appData.slots[window.appData.currentSlotIndex];
+            if (!slot) return;
+
+            document.getElementById('signageHeroTickets').textContent = `${formatTicketNum(slot.startTicket)} 〜 ${formatTicketNum(slot.endTicket)}`;
+            document.getElementById('signageHeroTime').textContent = `${slot.startTimeStr} 〜 ${slot.endTimeStr}`;
+
+            let slotEntered = 0;
+            for (let id = slot.startTicket; id <= slot.endTicket; id++) {
+                if (window.appData.tickets[id] && window.appData.tickets[id].status === 'entered') {
+                    slotEntered++;
+                }
+            }
+            document.getElementById('signageRatioText').textContent = `${slotEntered} / ${slot.capacity} 人`;
+
+            const delayBanner = document.getElementById('signageDelayBanner');
+            const delayText = document.getElementById('signageDelayText');
+            const delayIcon = document.getElementById('signageDelayIcon');
+
+            if (window.appData.delayMinutes === 0) {
+                delayText.textContent = 'ただいま予定通り案内中です';
+                delayText.className = 'text-xl sm:text-2xl font-black text-emerald-400';
+                delayBanner.className = 'bg-slate-900 border-2 border-emerald-500/50 rounded-2xl p-4 flex items-center justify-between shadow-lg';
+                delayIcon.className = 'w-10 h-10 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl font-bold';
+                delayIcon.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
+            } else if (window.appData.delayMinutes > 0) {
+                delayText.textContent = `現在 【${window.appData.delayMinutes}分】 案内が遅れています`;
+                delayText.className = 'text-xl sm:text-2xl font-black text-amber-400';
+                delayBanner.className = 'bg-slate-900 border-2 border-amber-500/50 rounded-2xl p-4 flex items-center justify-between shadow-lg';
+                delayIcon.className = 'w-10 h-10 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center text-xl font-bold';
+                delayIcon.innerHTML = '<i class="fa-solid fa-clock"></i>';
+            } else {
+                delayText.textContent = `現在 【${Math.abs(window.appData.delayMinutes)}分】 スケジュール前倒し中`;
+                delayText.className = 'text-xl sm:text-2xl font-black text-sky-400';
+                delayBanner.className = 'bg-slate-900 border-2 border-sky-500/50 rounded-2xl p-4 flex items-center justify-between shadow-lg';
+                delayIcon.className = 'w-10 h-10 rounded-full bg-sky-500/20 text-sky-400 flex items-center justify-center text-xl font-bold';
+                delayIcon.innerHTML = '<i class="fa-solid fa-forward"></i>';
+            }
+
+            const nextSlot = window.appData.slots[window.appData.currentSlotIndex + 1];
+            if (nextSlot) {
+                document.getElementById('signageNextTime').textContent = `${nextSlot.startTimeStr} 〜 ${nextSlot.endTimeStr}`;
+                document.getElementById('signageNextTickets').textContent = `整理券 ${formatTicketNum(nextSlot.startTicket)} 〜 ${formatTicketNum(nextSlot.endTicket)} 番の方`;
+            } else {
+                document.getElementById('signageNextTime').textContent = '本日の案内終了';
+                document.getElementById('signageNextTickets').textContent = '最終時間枠です';
+            }
+        }
+
+        // Security & Permission Enforcement
+        window.requireAdmin = function(actionCallback) {
+            if (window.isAthorizedAdmin) {
+                actionCallback();
+            } else {
+                pendingAction = actionCallback;
+                openModal('modalAdminAuth');
+            }
+        };
+
+        window.verifyAdminPasscode = function() {
+            const input = document.getElementById('inputAuthPin').value.trim();
+            const correctPin = window.appData.config.adminPin || '1234';
+
+            if (input === correctPin) {
+                window.isAthorizedAdmin = true;
+                closeModal('modalAdminAuth');
+                document.getElementById('roleBadge').textContent = '管理者';
+                document.getElementById('roleBadge').className = 'bg-amber-500 text-slate-950 font-black text-xs px-2 py-0.5 rounded tracking-wider uppercase';
+                
+                if (pendingAction) {
+                    pendingAction();
+                    pendingAction = null;
+                }
+            } else {
+                alert('暗証番号（PIN）が違います。');
+            }
+        };
+
+        window.saveAdminPin = function() {
+            const newPin = document.getElementById('inputAdminPin').value.trim();
+            if (newPin.length < 4) {
+                alert('管理者PINコードは4桁以上で設定してください。');
+                return;
+            }
+            window.appData.config.adminPin = newPin;
+            saveData();
+            alert('管理者PINコードを変更しました。');
+        };
+
+        window.saveCustomBaseUrl = function() {
+            const url = document.getElementById('inputCustomBaseUrl').value.trim();
+            window.appData.config.customBaseUrl = url;
+            saveData();
+            alert('共有用ベースURLを保存しました。');
+        };
+
+        // Chime Audio Function
+        window.playChimeSound = function() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const now = ctx.currentTime;
+
+                const osc1 = ctx.createOscillator();
+                const gain1 = ctx.createGain();
+                osc1.frequency.setValueAtTime(659.25, now);
+                gain1.gain.setValueAtTime(0.3, now);
+                gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.8);
+                osc1.connect(gain1);
+                gain1.connect(ctx.destination);
+                osc1.start(now);
+                osc1.stop(now + 0.8);
+
+                const osc2 = ctx.createOscillator();
+                const gain2 = ctx.createGain();
+                osc2.frequency.setValueAtTime(523.25, now + 0.3);
+                gain2.gain.setValueAtTime(0.3, now + 0.3);
+                gain2.gain.exponentialRampToValueAtTime(0.001, now + 1.2);
+                osc2.connect(gain2);
+                gain2.connect(ctx.destination);
+                osc2.start(now + 0.3);
+                osc2.stop(now + 1.2);
+            } catch(e) {
+                console.log("Audio play deferred", e);
+            }
+        };
+
+        // Switch Screen Views
+        window.switchViewMode = function(mode) {
+            const signageView = document.getElementById('signageView');
+            if (mode === 'display') {
+                signageView.classList.remove('hidden');
+                renderSignageView();
+            } else {
+                signageView.classList.add('hidden');
+            }
+        };
+
+        window.toggleFullScreen = function() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.log(`Fullscreen request error: ${err.message}`);
+                });
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        };
+
+        // Share Helpers
+        window.openShareModal = function() {
+            openModal('modalShare');
+            const qrContainer = document.getElementById('qrcodeCanvas');
+            qrContainer.innerHTML = '';
+
+            const shareUrl = getShareUrl('viewer');
+            const warningEl = document.getElementById('shareBlobWarning');
+
+            if (shareUrl.startsWith('blob:')) {
+                warningEl.classList.remove('hidden');
+            } else {
+                warningEl.classList.add('hidden');
+            }
+
+            new QRCode(qrContainer, {
+                text: shareUrl,
+                width: 160,
+                height: 160
+            });
+        };
+
+        function getShareUrl(mode) {
+            if (window.appData.config.customBaseUrl) {
+                const base = window.appData.config.customBaseUrl.split('?')[0];
+                return `${base}?mode=${mode}`;
+            }
+            const baseUrl = window.location.href.split('?')[0];
+            return `${baseUrl}?mode=${mode}`;
+        }
+
+        window.copyShareUrl = function(mode) {
+            const url = getShareUrl(mode);
+            const tempInput = document.createElement('input');
+            tempInput.value = url;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+            alert(`${mode === 'display' ? 'サイネージ用' : '閲覧専用'}URLをクリップボードにコピーしました！`);
+        };
+
+        window.filterTickets = function(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.className = 'filter-btn px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700';
+            });
+            document.getElementById(`filterBtn-${filter}`).className = 'filter-btn px-3 py-1.5 rounded-lg bg-brand-600 text-white font-bold';
+            renderAllTickets();
+        };
+
+        function renderAllTickets() {
+            const container = document.getElementById('allTicketsList');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const searchQuery = document.getElementById('ticketSearchInput')?.value.trim();
+            const allTicketsArray = Object.values(window.appData.tickets);
+
+            const filtered = allTicketsArray.filter(t => {
+                if (currentFilter !== 'all' && t.status !== currentFilter) return false;
+                if (searchQuery) {
+                    return String(t.id).includes(searchQuery) || formatTicketNum(t.id).includes(searchQuery);
+                }
+                return true;
+            });
+
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="text-center py-8 text-slate-400 text-sm">該当する整理券が見つかりません</div>';
+                return;
+            }
+
+            filtered.forEach(t => {
+                const slot = window.appData.slots[t.slotIndex];
+                const item = document.createElement('div');
+                item.className = "py-3 flex justify-between items-center gap-2";
+
+                let badge = '';
+                if (t.status === 'entered') badge = '<span class="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-bold">入場済み</span>';
+                else if (t.status === 'late') badge = '<span class="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-bold">遅刻</span>';
+                else if (t.status === 'cancelled') badge = '<span class="text-xs bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold">キャンセル</span>';
+                else badge = '<span class="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded font-bold">未入場</span>';
+
+                item.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <span class="font-mono font-bold text-lg text-slate-900">${formatTicketNum(t.id)}</span>
+                        <div>
+                            <div class="text-xs text-slate-500">枠 #${t.slotIndex + 1} (${slot ? slot.startTimeStr : ''}〜${slot ? slot.endTimeStr : ''})</div>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        ${badge}
+                        <button onclick="requireAdmin(() => setTicketStatus(${t.id}, '${t.status === 'entered' ? 'unentered' : 'entered'}'))" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 px-2.5 py-1 rounded border font-bold">
+                            切替
+                        </button>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        window.keypadPress = function(val) {
+            const input = document.getElementById('checkTicketInput');
+            if (val === 'C') {
+                input.value = '';
+            } else if (val === 'DEL') {
+                input.value = input.value.slice(0, -1);
+            } else {
+                if (input.value.length < 5) {
+                    input.value += val;
+                }
+            }
+        };
+
+        window.verifyTicketNumber = function() {
+            const inputVal = document.getElementById('checkTicketInput').value.trim();
+            const container = document.getElementById('checkResultContainer');
+            container.classList.remove('hidden');
+
+            if (!inputVal) {
+                container.innerHTML = `
+                    <div class="bg-amber-50 border border-amber-200 text-amber-800 p-4 rounded-2xl text-center">
+                        <i class="fa-solid fa-circle-exclamation text-2xl mb-1"></i>
+                        <p class="font-bold text-sm">整理券番号を入力してください</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const ticketId = parseInt(inputVal, 10);
+            const ticket = window.appData.tickets[ticketId];
+
+            if (!ticket) {
+                container.innerHTML = `
+                    <div class="bg-rose-50 border-2 border-rose-300 text-rose-800 p-5 rounded-2xl text-center shadow-sm">
+                        <i class="fa-solid fa-circle-xmark text-4xl text-rose-600 mb-2"></i>
+                        <h3 class="font-black text-lg">この整理券番号は登録されていません</h3>
+                        <p class="text-xs text-rose-600 mt-1">番号：${formatTicketNum(ticketId)}</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const currentSlot = window.appData.slots[window.appData.currentSlotIndex];
+            const isCurrentSlot = (ticket.slotIndex === window.appData.currentSlotIndex);
+            const ticketSlot = window.appData.slots[ticket.slotIndex];
+
+            if (isCurrentSlot) {
+                container.innerHTML = `
+                    <div class="bg-emerald-50 border-2 border-emerald-400 p-5 rounded-2xl text-center shadow-sm">
+                        <i class="fa-solid fa-circle-check text-4xl text-emerald-600 mb-2"></i>
+                        <span class="inline-block bg-emerald-600 text-white font-bold text-xs px-2.5 py-0.5 rounded-full mb-1">現在の入場枠対象</span>
+                        <h3 class="font-black text-2xl text-slate-900">整理券 ${formatTicketNum(ticketId)}</h3>
+                        <p class="text-xs text-slate-600 mt-1">枠: ${ticketSlot.startTimeStr} 〜 ${ticketSlot.endTimeStr}</p>
+                        <div class="mt-4 pt-3 border-t border-emerald-200 flex justify-center gap-2">
+                            <button onclick="requireAdmin(() => setTicketStatus(${ticket.id}, 'entered'))" class="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-2.5 rounded-xl text-sm shadow">
+                                そのまま入場処理をする
+                            </button>
+                        </div>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div class="bg-amber-50 border-2 border-amber-400 p-5 rounded-2xl text-center shadow-sm">
+                        <i class="fa-solid fa-triangle-exclamation text-4xl text-amber-500 mb-2"></i>
+                        <span class="inline-block bg-amber-500 text-white font-bold text-xs px-2.5 py-0.5 rounded-full mb-1">枠間違い</span>
+                        <h3 class="font-black text-xl text-slate-900">この整理券は現在の入場枠ではありません</h3>
+                        <div class="mt-3 bg-white p-3 rounded-xl border border-amber-200 text-xs text-slate-700 text-left space-y-1">
+                            <div>・対象の時間枠: <strong>${ticketSlot ? ticketSlot.startTimeStr + '〜' + ticketSlot.endTimeStr : '不明'} (第${ticket.slotIndex + 1}枠)</strong></div>
+                            <div>・現在の受付枠: <strong>${currentSlot ? currentSlot.startTimeStr + '〜' + currentSlot.endTimeStr : ''}</strong></div>
+                            <div>・整理券状態: <strong>${ticket.status === 'entered' ? '入場済み' : '未入場'}</strong></div>
+                        </div>
+                    </div>
+                `;
+            }
+        };
+
+        function renderSlotManagementList() {
+            const container = document.getElementById('slotListContainer');
+            if (!container) return;
+            container.innerHTML = '';
+
+            window.appData.slots.forEach(slot => {
+                const isOverCap = slot.capacity >= 9;
+                const card = document.createElement('div');
+                card.className = `p-3.5 rounded-xl border ${isOverCap ? 'border-amber-300 bg-amber-50/30' : 'border-slate-200 bg-slate-50'} flex flex-col lg:flex-row justify-between items-start lg:items-center gap-3`;
+
+                card.innerHTML = `
+                    <div class="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                        <span class="font-bold text-xs bg-slate-800 text-white px-2 py-1 rounded">枠 #${slot.index + 1}</span>
+                        <div class="flex items-center gap-1 bg-white px-2 py-1 border border-slate-300 rounded-lg shadow-sm">
+                            <input type="time" value="${slot.startTimeStr}" onchange="requireAdmin(() => updateSlotTime(${slot.index}, 'startTimeStr', this.value))" class="font-mono font-bold text-sm bg-transparent border-none focus:outline-none">
+                            <span class="text-slate-400 font-bold">〜</span>
+                            <input type="time" value="${slot.endTimeStr}" onchange="requireAdmin(() => updateSlotTime(${slot.index}, 'endTimeStr', this.value))" class="font-mono font-bold text-sm bg-transparent border-none focus:outline-none">
+                        </div>
+                        <span class="text-xs font-mono bg-slate-200 px-2 py-1 rounded text-slate-700 font-bold">整理券 ${formatTicketNum(slot.startTicket)}〜${formatTicketNum(slot.endTicket)}</span>
+                    </div>
+
+                    <div class="flex items-center gap-2 w-full lg:w-auto justify-end">
+                        <span class="text-xs text-slate-500 font-bold">定員:</span>
+                        <div class="flex gap-1">
+                            ${[5,6,7,8].map(cap => `
+                                <button onclick="requireAdmin(() => requestCapacityChange(${slot.index}, ${cap}))" class="px-2.5 py-1 rounded-lg text-xs font-bold ${slot.capacity === cap ? 'bg-slate-900 text-white' : 'bg-white border text-slate-700'}">
+                                    ${cap}人
+                                </button>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        window.updateSlotTime = function(slotIndex, timeType, value) {
+            if (window.appData.slots[slotIndex]) {
+                window.appData.slots[slotIndex][timeType] = value;
+                saveData();
+            }
+        };
+
+        window.requestCapacityChange = function(slotIndex, newCap) {
+            window.appData.slots[slotIndex].capacity = newCap;
+            recalculateRanges();
+            saveData();
+        };
+
+        function recalculateRanges() {
+            let currentTicketCounter = Number(window.appData.config.startTicketNum);
+            window.appData.slots.forEach(slot => {
+                slot.startTicket = currentTicketCounter;
+                slot.endTicket = currentTicketCounter + slot.capacity - 1;
+                currentTicketCounter += slot.capacity;
+            });
+            rebuildTicketsMap();
+        }
+
+        window.prevSlot = function() {
+            if (window.appData.currentSlotIndex > 0) {
+                window.appData.currentSlotIndex--;
+                saveData();
+            }
+        };
+
+        window.confirmNextSlot = function() {
+            const nextSlot = window.appData.slots[window.appData.currentSlotIndex + 1];
+            if (!nextSlot) {
+                alert('これが最後の時間枠です。');
+                return;
+            }
+            document.getElementById('nextSlotModalTime').textContent = `${nextSlot.startTimeStr} 〜 ${nextSlot.endTimeStr}`;
+            openModal('modalNextSlot');
+        };
+
+        window.executeNextSlot = function() {
+            if (window.appData.currentSlotIndex < window.appData.slots.length - 1) {
+                window.appData.currentSlotIndex++;
+                saveData();
+                playChimeSound();
+            }
+            closeModal('modalNextSlot');
+        };
+
+        function renderSettingsTab() {
+            const { startTime, slotInterval = 30, defaultCapacity, totalSlots, startTicketNum, customBaseUrl = '' } = window.appData.config;
+            document.getElementById('cfgStartTime').value = startTime;
+            document.getElementById('cfgSlotInterval').value = slotInterval;
+            document.getElementById('cfgDefaultCapacity').value = defaultCapacity;
+            document.getElementById('cfgTotalSlots').value = totalSlots;
+            document.getElementById('cfgStartTicketNum').value = startTicketNum;
+            document.getElementById('inputCustomBaseUrl').value = customBaseUrl;
+
+            let total = 0, entered = 0, late = 0, cancelled = 0;
+            Object.values(window.appData.tickets).forEach(t => {
+                total++;
+                if (t.status === 'entered') entered++;
+                else if (t.status === 'late') late++;
+                else if (t.status === 'cancelled') cancelled++;
+            });
+
+            document.getElementById('summaryTotal').textContent = `${total} 枚`;
+            document.getElementById('summaryEntered').textContent = `${entered} 人`;
+            document.getElementById('summaryLate').textContent = `${late} 人`;
+            document.getElementById('summaryCancelled').textContent = `${cancelled} 人`;
+        }
+
+        window.applySettings = function() {
+            window.appData.config.startTime = document.getElementById('cfgStartTime').value;
+            window.appData.config.slotInterval = parseInt(document.getElementById('cfgSlotInterval').value, 10);
+            window.appData.config.defaultCapacity = parseInt(document.getElementById('cfgDefaultCapacity').value, 10);
+            window.appData.config.totalSlots = parseInt(document.getElementById('cfgTotalSlots').value, 10);
+            window.appData.config.startTicketNum = parseInt(document.getElementById('cfgStartTicketNum').value, 10);
+
+            generateSlotsAndTickets();
+            saveData();
+            alert('スケジュールを再生成しました。');
+        };
+
+        window.openDelayAdjustModal = function() {
+            document.getElementById('inputDelayMinutes').value = window.appData.delayMinutes;
+            openModal('modalDelay');
+        };
+
+        window.adjustDelayMinutes = function(delta) {
+            const input = document.getElementById('inputDelayMinutes');
+            let val = parseInt(input.value, 10) || 0;
+            input.value = val + delta;
+        };
+
+        window.setDelay = function(minutes) {
+            document.getElementById('inputDelayMinutes').value = minutes;
+        };
+
+        window.saveDelaySetting = function() {
+            const val = parseInt(document.getElementById('inputDelayMinutes').value, 10) || 0;
+            window.appData.delayMinutes = val;
+            saveData();
+            closeModal('modalDelay');
+        };
+
+        window.switchTab = function(tabName) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('border-brand-600', 'text-brand-600');
+                btn.classList.add('border-transparent', 'text-slate-500');
+            });
+
+            document.getElementById(`tab-${tabName}`).classList.remove('hidden');
+            const activeBtn = document.getElementById(`tabBtn-${tabName}`);
+            if (activeBtn) {
+                activeBtn.classList.remove('border-transparent', 'text-slate-500');
+                activeBtn.classList.add('border-brand-600', 'text-brand-600');
+            }
+        };
+
+        window.openModal = function(id) {
+            document.getElementById(id)?.classList.remove('hidden');
+        };
+
+        window.closeModal = function(id) {
+            document.getElementById(id)?.classList.add('hidden');
+        };
+
+        window.openResetModal = function() {
+            openModal('modalReset');
+        };
+
+        window.executeResetData = function() {
+            localStorage.removeItem('event_mgmt_local_data');
+            initDefaultData();
+            saveData();
+            closeModal('modalReset');
+        };
+    </script>
+</body>
+</html>
